@@ -1,3 +1,4 @@
+import sys, os, logging, traceback, threading
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 from tkinter.simpledialog import Dialog
@@ -5,6 +6,45 @@ import re
 from matplotlib.text import Text
 import numpy as np
 
+LOG_FILE = os.path.join(os.path.expanduser("~"), "plot_gui_error.log")
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.ERROR,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+
+def _format_exc(exc_type, exc_value, exc_tb) -> str:
+    return "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+
+def _show_error_dialog(title: str, brief: str):
+    # 在 GUI 环境下弹窗；若 GUI 未就绪或已销毁，尽量吞掉而不再抛错
+    try:
+        messagebox.showerror(title, brief)
+    except Exception:
+        pass
+
+def _handle_unhandled(exc_type, exc_value, exc_tb):
+    # 1) 记录完整堆栈到日志
+    text = _format_exc(exc_type, exc_value, exc_tb)
+    logging.error("UNHANDLED EXCEPTION\n%s", text)
+
+    # 2) 弹窗简要提示（标题 + 简短错误 + 日志位置）
+    brief = f"{exc_type.__name__}: {exc_value}\n\n详细堆栈已保存到：\n{LOG_FILE}"
+    _show_error_dialog("程序发生未处理的异常", brief)
+
+# 普通未捕获异常（主线程）
+sys.excepthook = _handle_unhandled
+
+# 线程中的未捕获异常（Python 3.8+）
+def _thread_excepthook(args: threading.ExceptHookArgs):
+    _handle_unhandled(args.exc_type, args.exc_value, args.exc_traceback)
+threading.excepthook = _thread_excepthook
+
+# Tkinter 回调中的异常（按钮/事件等）
+def _tk_report_callback_exception(self, exc, val, tb):
+    _handle_unhandled(exc, val, tb)
+# 用类级别覆盖，确保在 root 创建前生效
+tk.Tk.report_callback_exception = _tk_report_callback_exception
 plt, plot = None, None
 cum_figs, z_figs = [], []
 
@@ -72,7 +112,7 @@ def enable_text_editing(fig, ax, master):
                     artist.set_fontweight('bold')
                 else:
                     # 继续用 TeX math 加粗
-                    new_math = rf"$\mathbf{{{new_inner}}}$"
+                    new_math = rf"$\mathbf{{{plot._tex_escape(new_inner)}}}$"
                     artist.set_text(new_math + rest)
 
                 fig.canvas.draw_idle()
@@ -151,11 +191,14 @@ def enable_xaxis_editing(fig, ax, master):
 def plot_cum_distribution():
     ensure_plot_libs()
     global cum_figs
-    try:
-        round_input = abs(int(entry_round.get()))
-    except ValueError:
-        messagebox.showerror("不正确的输入", "请输入四舍五入到几位小数。")
-        return
+    if entry_round.get() != "":
+        try:
+            round_input = abs(int(entry_round.get()))
+        except ValueError:
+            messagebox.showerror("不正确的输入", "请输入四舍五入到几位小数。")
+            return
+    else:
+        round_input = None
     try:
         data_cols = plot.clipboard_to_array(root, round_input)
     except ValueError:
@@ -189,11 +232,14 @@ def plot_cum_distribution():
 def plot_z_value():
     ensure_plot_libs()
     global z_figs
-    try:
-        round_input = abs(int(entry_round.get()))
-    except ValueError:
-        messagebox.showerror("不正确的输入", "请输入四舍五入到几位小数。")
-        return
+    if entry_round.get() != "":
+        try:
+            round_input = abs(int(entry_round.get()))
+        except ValueError:
+            messagebox.showerror("不正确的输入", "请输入四舍五入到几位小数。")
+            return
+    else:
+        round_input = None
     try:
         data_cols = plot.clipboard_to_array(root, round_input)
     except ValueError:
@@ -250,6 +296,3 @@ chk_grid = tk.Checkbutton(container, text = "Add grids",
                                                 pady = 5)
 root.mainloop()
 
-
-
-    
