@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.stats import norm
+import re
 '''
 项目1：python画图脚本
 输入：手动输入csv中的一列或多列，每一格的数据
@@ -124,7 +125,7 @@ def _mpl():
     globals()["plt"] = _plt          #写回全局
     return _plt
 
-def clipboard_to_array(root, round_input):
+def clipboard_to_array(root, round_input = None):
     #将粘贴板中的数据转换为数字组成的阵列
     #自动跳过数据中的字符串
     clipboard = root.clipboard_get().strip('\n').split("\n")#去掉\n
@@ -134,14 +135,20 @@ def clipboard_to_array(root, round_input):
         if idx == 0: #检测第一行是否含有名字（无法转换为float的字符串）
             for x in raw_row.split('\t'):
                 try:
-                    cleaned_row.append(np.round(float(x), round_input))    
+                    if round_input is None:
+                        cleaned_row.append(float(x))
+                    else:
+                        cleaned_row.append(np.round(float(x), round_input))    
                 except ValueError:
                     if isinstance(x, str):
                         cleaned_row.append(x)
         else:      
             for x in raw_row.split('\t'):
                 try:
-                    cleaned_row.append(np.round(float(x), round_input))
+                    if round_input is None:
+                        cleaned_row.append(float(x))
+                    else:
+                        cleaned_row.append(np.round(float(x), round_input))
                 except ValueError:
                     cleaned_row.append(-1e30) #用-1e30作为占位符填充数据失真
                     #这里默认数据中不会出现-1e30
@@ -169,7 +176,7 @@ def count_sort(Arr, n): #比较第n位数
         output.extend(count[digit])
     return output
 
-def radix_sort(Arr, round_input):#round_input是四舍五入到几位数
+def radix_sort(Arr, round_input: int):#round_input是四舍五入到几位数
     scaled = [int((10 ** round_input) * num) for num in Arr]
     n = 0
     if len(scaled) != 0:
@@ -182,7 +189,7 @@ def radix_sort(Arr, round_input):#round_input是四舍五入到几位数
     output = [num / (10 ** round_input) for num in scaled]
     return output
 
-def radix_sort_with_negative(Arr, round_input):
+def radix_sort_with_negative(Arr, round_input: int):
     Arr_positive, Arr_negative = [], []
     for num in Arr:
         if num >= 0:
@@ -220,7 +227,7 @@ def cum_prob(Arr):#计算累计概率, 此时Arr经过radix sort，是有序的
 # —— 将剪切板中的数据（列）转换成这个class —— #
 class DataColumn:
     PLACEHOLDER = -1e30        #剪切板中不合法的数据点（比如字符串）将被替换为这个
-    def __init__(self, raw_col: list[float | str], idx: int, round_input: int):
+    def __init__(self, raw_col: list[float | str], idx: int, round_input = None):
         first = raw_col[0]
         self.name = (f"data{idx+1}"
                      if isinstance(first, (int, float))
@@ -230,13 +237,21 @@ class DataColumn:
         self.N   = len(self.values)
         self.med = (np.median(self.values) #中位数
                     if self.N else float("nan"))
-        sorted_vals = radix_sort_with_negative(self.values, round_input)
+        if round_input is None:
+            sorted_vals = sorted(self.values)
+        else:
+            sorted_vals = radix_sort_with_negative(self.values, round_input)
         self.stats  = cum_prob(sorted_vals) #包含累计概率和z值
+
+def _tex_escape(s: str) -> str:
+    # 转义 mathtext 特殊字符
+    return re.sub(r'([_$%#&^{}])', r'\\\1', s)
 
 # —— 图例（legend）格式 —— #
 def _label(dc: DataColumn, min_, max_):
-    return (rf"$\mathbf{{{dc.name}}}$" + "\n"
-            f"N={dc.N}, med={dc.med:.4g},\n"
+    safe_name = _tex_escape(dc.name)
+    return (rf"$\mathbf{{{safe_name}}}$" + "\n"
+            f"N={dc.N}, med={dc.med},\n"
             f"max={max_}, min={min_}")
 
 # —— 绘制CDF —— #
@@ -260,7 +275,7 @@ def plot_distribution(data_cols: list[DataColumn],
         overall_min_x = min(overall_min_x, ax1.get_xlim()[0])
         import matplotlib.ticker as mticker
         ax1.xaxis.set_major_formatter(mticker.ScalarFormatter())
-    plt.rcParams['font.sans-serif'] = ['SimSun']
+    plt.rcParams['font.sans-serif'] = ['Calibrius','SimSun']
 # 正常显示负号
     plt.rcParams['axes.unicode_minus'] = False
     ax1.margins(y=0.08)  
@@ -289,14 +304,13 @@ def plot_distribution(data_cols: list[DataColumn],
     ax1.set_xticks(np.linspace(overall_min_x - scalar,
                                 overall_max_x + scalar, 11
                                   ))
-    
 
     ax1.tick_params(axis='x', rotation=45)
     
     if new_figure:
         # first draw: show just these lines
         leg = ax1.legend(
-            loc='center left', bbox_to_anchor=(1.02, 0.5),
+            loc='upper left', bbox_to_anchor=(1.02, 0.5),
             frameon=True, prop={'size': 9}
         )
     else:
@@ -306,7 +320,7 @@ def plot_distribution(data_cols: list[DataColumn],
         all_labels = [ln.get_label() for ln in all_lines]
         leg = ax1.legend(
             all_lines, all_labels,
-            loc='center left', bbox_to_anchor=(1.02, 0.5),
+            loc='upper left', bbox_to_anchor=(1.02, 0.5),
             frameon=True, prop={'size': 9}
         ) 
     for txt in leg.get_texts():
@@ -324,9 +338,9 @@ def plot_distribution(data_cols: list[DataColumn],
         i = ind["ind"][0]
         xi, yi, zi = xdata[i], ydata[i], zdata[i]
         annot.xy = (xi, yi)
-        annot.set_text(f"Val={xi:.4f}\n"
-                       f"Cum_prob={100 * yi:.4f}%\n"
-                       f"Z={zi:.4f}\u03C3")
+        annot.set_text(f"Val={xi}\n"
+                       f"Cum_prob={100 * yi:.3f}%\n"
+                       f"Z={zi:.3f}\u03C3")
         annot.get_bbox_patch().set_alpha(0.8)
 
     def hover(event):
@@ -372,7 +386,7 @@ def plot_Z(data_cols: list[DataColumn], new_figure = True, grid_var = True):
         overall_min_y = min(overall_min_y, ax2.get_ylim()[0])
         import matplotlib.ticker as mticker
         ax2.xaxis.set_major_formatter(mticker.ScalarFormatter())
-    plt.rcParams['font.sans-serif'] = ['SimSun']
+    plt.rcParams['font.sans-serif'] = ['Calibrius','SimSun']
     plt.rcParams['axes.unicode_minus'] = False
     ax2.margins(y=0.08) 
     ax2.set_title("Title", fontweight = "bold")
@@ -383,10 +397,11 @@ def plot_Z(data_cols: list[DataColumn], new_figure = True, grid_var = True):
     ax2.set_xticks(np.linspace(overall_min_x - scalar,
                                 overall_max_x + scalar, 11
                                   ))
-    ax2.set_yticks(np.linspace(overall_min_y * 1.1,
-                                overall_max_y * 1.1,
-                                  11)) 
-    ax2.tick_params(axis='both', rotation=45)
+    rounded_max = int(overall_max_y + 1)
+    yticks = list(range(-rounded_max, rounded_max + 1)) 
+    yticks_labels = [str(ytick) + "\u03C3" for ytick in yticks]
+    ax2.set_yticks(ticks = yticks, labels = yticks_labels)
+    ax2.tick_params(axis='x', rotation=45)
 
     lines = []
     for dc in data_cols:
@@ -404,7 +419,7 @@ def plot_Z(data_cols: list[DataColumn], new_figure = True, grid_var = True):
     if new_figure:
         # first draw: show just these lines
         leg = ax2.legend(
-            loc='center left', bbox_to_anchor=(1.02, 0.5),
+            loc='upper left', bbox_to_anchor=(1.02, 0.5),
             frameon=True, prop={'size': 9}
         )
     else:
@@ -414,7 +429,7 @@ def plot_Z(data_cols: list[DataColumn], new_figure = True, grid_var = True):
         all_labels = [ln.get_label() for ln in all_lines]
         leg = ax2.legend(
             all_lines, all_labels,
-            loc='center left', bbox_to_anchor=(1.02, 0.5),
+            loc='upper left', bbox_to_anchor=(1.02, 0.5),
             frameon=True, prop={'size': 9}
         ) 
     for txt in leg.get_texts():
@@ -432,9 +447,9 @@ def plot_Z(data_cols: list[DataColumn], new_figure = True, grid_var = True):
         i = ind["ind"][0]
         xi, yi, zi = xdata[i], ydata[i], zdata[i]
         annot.xy = (xi, yi)
-        annot.set_text(f"Val={xi:.4f}\n"
-                       f"Z={yi:.4f}\u03C3\n"
-                       f"Cum Prob={100 * zi:.4f}%")
+        annot.set_text(f"Val={xi}\n"
+                       f"Z={yi:.3f}\u03C3\n"
+                       f"Cum Prob={100 * zi:.3f}%")
         annot.get_bbox_patch().set_alpha(0.8)
 
     def hover(event):
@@ -461,11 +476,9 @@ def plot_Z(data_cols: list[DataColumn], new_figure = True, grid_var = True):
 #打包：
 #cd C:\Users\1000405157\Desktop\Work\plot program
 #python -m PyInstaller --noconsole --onefile plot_gui.py
-#python -m PyInstaller --onedir plot_gui.py
+#python -m PyInstaller --noconsole --onedir plot_gui.py
 #"C:\Users\1000405157\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\Scripts\pyinstaller.exe" --onedir --noconsole "C:\Users\1000405157\Desktop\Work\plot program\plot_gui.py"
 
 
 #ax1.xaxis.set_major_locator(MaxNLocator(nbins=11, prune='both'))  # 最多11个主刻度
-'''
 
-'''
