@@ -46,10 +46,9 @@ bounds = [ #图像y轴的刻度点
 
 # —— 懒加载matplotlib, 定义y轴放缩函数 —— #
 def _mpl():
-    """按需导入 matplotlib 及自定义 Scale，只调用一次"""
     global plt
     try:
-        return plt            # 已经导过，直接返回
+        return plt#已经导过，直接返回
     except NameError:
         pass
     import matplotlib.pyplot as _plt
@@ -111,8 +110,7 @@ def _mpl():
         def get_transform(self):
             return PiecewiseLinearTransform(self.bounds)
 
-        def set_default_locators_and_formatters(self, axis):
-            
+        def set_default_locators_and_formatters(self, axis):            
             axis.set_major_locator(ticker.FixedLocator(self.bounds))
             axis.set_major_formatter(ticker.FixedFormatter([
                 "0.0001%","0.001%","0.01%","0.1%","1%","10%",
@@ -133,14 +131,15 @@ def clipboard_to_array(root, round_input = None):
     for idx, raw_row in enumerate(clipboard):
         cleaned_row = []
         if idx == 0: #检测第一行是否含有名字（无法转换为float的字符串）
-            for x in raw_row.split('\t'):
+            for x in raw_row.split('\t'): #excel每行的数据是用\t隔开的
                 try:
                     if round_input is None:
                         cleaned_row.append(float(x))
                     else:
                         cleaned_row.append(np.round(float(x), round_input))    
+                        #四舍五入
                 except ValueError:
-                    if isinstance(x, str):
+                    if isinstance(x, str):#检测第一行是不是标题
                         cleaned_row.append(x)
         else:      
             for x in raw_row.split('\t'):
@@ -159,7 +158,7 @@ def clipboard_to_array(root, round_input = None):
         rows[1]
     except IndexError:
         raise ValueError #ValueError会触发showerror，见plot_gui.py
-    cols = [list(col) for col in list(zip(*rows))]
+    cols = [list(col) for col in list(zip(*rows))]#将rows转换成columns
     data_cols = [DataColumn(col, idx, round_input) #datacolumn见后面
              for idx, col in enumerate(cols)]
 
@@ -169,7 +168,7 @@ def clipboard_to_array(root, round_input = None):
 def count_sort(Arr, n): #比较第n位数
     count = [[] for _ in range(10)]
     for num in Arr:
-        nth_digit = (num // 10 ** (n)) % 10
+        nth_digit = (num // 10 ** (n)) % 10 #第n位数
         count[nth_digit].append(num)
     output = []
     for digit in range(10):
@@ -177,19 +176,19 @@ def count_sort(Arr, n): #比较第n位数
     return output
 
 def radix_sort(Arr, round_input: int):#round_input是四舍五入到几位数
-    scaled = [int((10 ** round_input) * num) for num in Arr]
+    scaled = [int((10 ** round_input) * num) for num in Arr] #转换为整数
     n = 0
     if len(scaled) != 0:
         maximum = max(scaled)
     else:
         return []
-    while maximum // (10 ** n) > 0:
+    while maximum // (10 ** n) > 0: #第n位数不为0
         scaled = count_sort(scaled, n) 
         n += 1
-    output = [num / (10 ** round_input) for num in scaled]
+    output = [num / (10 ** round_input) for num in scaled]#还原回去
     return output
 
-def radix_sort_with_negative(Arr, round_input: int):
+def radix_sort_with_negative(Arr, round_input: int):#处理负数的情况
     Arr_positive, Arr_negative = [], []
     for num in Arr:
         if num >= 0:
@@ -233,7 +232,7 @@ class DataColumn:
                      if isinstance(first, (int, float))
                      else str(first).strip()) #检测是不是名字
         nums = (raw_col[1:] if self.name != f"data{idx+1}" else raw_col)#数据部分array
-        self.values = [float(x) for x in nums if x != self.PLACEHOLDER]#过滤掉占位符的真实数据
+        self.values = [float(x) for x in nums if x != self.PLACEHOLDER]#过滤掉占位符后的真实数据
         self.N   = len(self.values)
         self.med = (np.median(self.values) #中位数
                     if self.N else float("nan"))
@@ -243,55 +242,222 @@ class DataColumn:
             sorted_vals = radix_sort_with_negative(self.values, round_input)
         self.stats  = cum_prob(sorted_vals) #包含累计概率和z值
 
-def _tex_escape(s: str) -> str:
-    # 转义 mathtext 特殊字符
-    return re.sub(r'([_$%#&^{}])', r'\\\1', s)
+# —— 参考线部分：与曲线的交点以及图例 —— #  
+def _short_label(lbl: str) -> str:
+    """从多行/TeX标签里提取短名（图例第一行），用于交点清单。"""
+    first = lbl.splitlines()[0]
+    m = re.fullmatch(r'\$\\mathbf\{(.*?)\}\$', first)
+    return m.group(1) if m else first
+
+def find_y_given_x0(xdata, ydata, x0):
+    #求给定x0，曲线中y的值。这里的xdata应该是严格递增的
+    i = np.searchsorted(xdata, x0) - 1 #找到x0可以插入的索引（再减1）
+    #或者说刚好比x0小的数的索引
+    if i < 0 or i >= len(xdata) - 1:
+        return None
+    x1, x2 = xdata[i], xdata[i+1]
+    y1, y2 = ydata[i], ydata[i+1]
+    #x0会在(x1, y1), (x2, y2)组成的直线中
+    if x2 == x1:#应该不需要考虑，因为xdata是严格递增的
+        return y1
+    k = (y2 - y1) / (x2 - x1) #斜率
+    return y1 + k * (x0 - x1) #x0在该线段中的y值
+
+def find_x_given_y0(xdata, ydata, y0):
+    #求给定y0，曲线中x的值。这里的ydata应该是严格递增的
+    #但由于累计概率计算方式比较奇葩，在中间的位置可能会出现y[med + 1] == y[med]
+    xs = []
+    for i in range(len(ydata) - 1):
+        y1, y2 = ydata[i], ydata[i+1]
+        if y1 == y0:
+            xs.append(xdata[i])
+        elif (y1 - y0) * (y2 - y0) < 0:
+            t = (y0 - y1) / (y2 - y1)
+            xs.append(xdata[i] + t * (xdata[i+1] - xdata[i]))
+    return xs
+
+def _get_data_lines(ax):
+    """当前坐标轴上所有‘数据曲线’（排除参考线 _is_ref=True）。"""
+    return [ln for ln in ax.get_lines() if not getattr(ln, "_is_ref", False)]
+
+def _recompute_ref_labels(ax):
+    """根据‘当前所有数据曲线’重新计算每条参考线的交点并更新它们的 label。"""
+    if not hasattr(ax, "_ref_lines"):
+        return
+    data_lines = _get_data_lines(ax)
+    for ref in list(ax._ref_lines):
+        if ref.axes is not ax:
+            continue
+        # 需要知道参考线类型与取值
+        is_x = getattr(ref, "_is_x", None)
+        val  = getattr(ref, "_val", None)
+        if is_x is None or val is None:
+            continue
+
+        pairs = []
+        for ln in data_lines:
+            xd, yd = np.asarray(ln.get_xdata()), np.asarray(ln.get_ydata())
+            lab = _short_label(ln.get_label())
+            if is_x:
+                y = find_y_given_x0(xd, yd, val)
+                if y is not None:
+                    pairs.append(f"{lab}:({val:.4g},{y:.4g})")
+            else:
+                xs = find_x_given_y0(xd, yd, val)
+                for xv in xs:
+                    pairs.append(f"{lab}:({xv:.4g},{val:.4g})")
+
+        base = (f"x = {val:g}" if is_x else f"y = {100 * val:g}%")
+        ref.set_label(base + (" | " + "; ".join(pairs) if pairs else " | no intersections in range"))
+
+def _refresh_ref_legend(ax, fig):
+    """在右下角刷新参考线图例，并把主图例加回去防止覆盖。"""
+    if not hasattr(ax, "_ref_lines"):
+        ax._ref_lines = []
+    if getattr(ax, "_ref_legend", None):#去掉旧的参考线图例#
+        try:
+            ax._ref_legend.remove()
+        except Exception:
+            pass
+        ax._ref_legend = None
+    if getattr(ax, "_main_legend", None):#把主图例加回去#
+        ax.add_artist(ax._main_legend)
+
+    handles = [ln for ln in ax._ref_lines if ln.axes is ax]
+    if handles:
+        ax._ref_legend = ax.legend(
+            handles=handles, loc='lower right', frameon=True,
+            prop={'size': 9}, title="Ref lines"
+        )
+    fig.canvas.draw_idle()
+        
+def _add_ref_line(ax, fig, mode, _data_lines_ignored=None):
+    import tkinter as tk
+    from tkinter import simpledialog, messagebox
+
+    class XYLineDialog(simpledialog.Dialog):
+        def body(self, master):
+            tk.Label(master, text="x =").grid(row=0, column=0, sticky="e")
+            tk.Label(master, text="y =").grid(row=1, column=0, sticky="e")
+            if mode == "plot_CDF":
+                tk.Label(master, text = '%').grid(row = 1, column = 2, sticky = 'w')
+            elif mode == "plot_Z":
+                tk.Label(master, text = "\u03C3").grid(row = 1, column = 2, sticky = 'w')
+            self.x_entry = tk.Entry(master); self.x_entry.grid(row=0, column=1, padx=6)
+            self.y_entry = tk.Entry(master); self.y_entry.grid(row=1, column=1, padx=6)
+            return self.x_entry         # 初始焦点
+
+        def validate(self):
+            x_raw, y_raw = self.x_entry.get().strip(), self.y_entry.get().strip()
+            if not x_raw and not y_raw:
+                messagebox.showerror("Wrong input", "Please at least input x or y")
+                return False
+            try:
+                self.x_val = float(x_raw) if x_raw else None
+                if mode == 'plot_CDF':
+                    self.y_val = float(y_raw) / 100 if y_raw else None
+                elif mode == 'plot_Z':
+                    self.y_val = float(y_raw) if y_raw else None
+                return True
+            except Exception:
+                messagebox.showerror("Wrong input", "Please input a figure.")
+                return False
+        
+    dlg = XYLineDialog(parent=None, title="Add Ref Line")
+    if not hasattr(dlg, "x_val") and not hasattr(dlg, "y_val"):
+        return        # 用户取消
+
+    # 可能一次要加两条线
+    for is_x, val in [(True, getattr(dlg, "x_val", None)),
+                      (False, getattr(dlg, "y_val", None))]:
+        if val is None:
+            continue
+
+        # 依据当前坐标轴已有的所有数据曲线计算交点
+        data_lines = _get_data_lines(ax)
+
+        # 画线 + 元数据
+        if is_x:
+            ref = ax.axvline(val, linestyle='--', linewidth=1.5, color='tab:red')
+            ref._is_x  = True
+            base_name  = f"x = {val:g}"
+        else:
+            ref = ax.axhline(val, linestyle='--', linewidth=1.5, color='tab:green')
+            ref._is_x  = False
+            base_name  = f"y = {val:g}"
+        ref._is_ref = True
+        ref._val    = val
+        ref.set_picker(True)
+
+        # 首次计算交点文本
+        pairs = []
+        for ln in data_lines:
+            xd, yd = np.asarray(ln.get_xdata()), np.asarray(ln.get_ydata())
+            lab = _short_label(ln.get_label())
+            if ref._is_x:
+                y = find_y_given_x0(xd, yd, val)
+                if y is not None:
+                    pairs.append(f"{lab}:({val:.4g},{y:.4g})")
+            else:
+                xs = find_x_given_y0(xd, yd, val)
+                for xv in xs:
+                    pairs.append(f"{lab}:({xv:.4g},{val:.4g})")
+        ref.set_label(base_name + (" | " + "; ".join(pairs) if pairs else " | no intersections in range"))
+
+        # 维护参考线列表
+        if not hasattr(ax, "_ref_lines"):
+            ax._ref_lines = []
+        ax._ref_lines.append(ref)
+
+    # 刷新图例（右下角），保留主图例
+    _refresh_ref_legend(ax, fig)
 
 # —— 图例（legend）格式 —— #
+def _tex_escape(s: str) -> str:
+    # 转义mathtext特殊字符
+    return re.sub(r'([_$%#&^{}])', r'\\\1', s)
+
 def _label(dc: DataColumn, min_, max_):
     safe_name = _tex_escape(dc.name)
-    return (rf"$\mathbf{{{safe_name}}}$" + "\n"
+    return (rf"$\mathbf{{{safe_name}}}$" + "\n" #通过LaTeX中的\mathbf进行加粗
             f"N={dc.N}, med={dc.med},\n"
             f"max={max_}, min={min_}")
 
 # —— 绘制CDF —— #
-def plot_distribution(data_cols: list[DataColumn],
+def plot_CDF(data_cols: list[DataColumn],
                        new_figure = True, 
     grid_var = True): #针对矩阵：内含多个字典
 #将读取到的数据进行绘图
-    plt = _mpl()
+    plt = _mpl() #懒加载
     global bounds
     overall_max_x = max(max(dc.stats.keys()) for dc in data_cols)
     overall_min_x = min(min(dc.stats.keys()) for dc in data_cols)
     if new_figure:
-        fig, ax1 = plt.subplots(figsize=(8,5))
-        ax1.set_yscale('piecewise', bounds=bounds)
-    else:
-        ax1 = plt.gca()
-        fig = ax1.figure
-        if ax1.get_yscale() != 'piecewise':
-            ax1.set_yscale('piecewise', bounds=bounds)
-        overall_max_x = max(overall_max_x, ax1.get_xlim()[1])
-        overall_min_x = min(overall_min_x, ax1.get_xlim()[0])
-        import matplotlib.ticker as mticker
-        ax1.xaxis.set_major_formatter(mticker.ScalarFormatter())
-    plt.rcParams['font.sans-serif'] = ['Calibrius','SimSun']
-# 正常显示负号
-    plt.rcParams['axes.unicode_minus'] = False
-    ax1.margins(y=0.08)  
-    ax1.set_title("Title", fontweight = 'bold')
-    ax1.set_xlabel("Value", fontweight = 'bold')
-    ax1.set_ylabel("Cum Prob", fontweight = 'bold')
-    ax1.set_ylim(bounds[0], bounds[-1]) 
+        fig, ax = plt.subplots(figsize=(8,5))
+        ax.set_yscale('piecewise', bounds=bounds)
+    else: #如果选择在原图上画
+        ax = plt.gca()#获取当前图像中的当前所有内容，并赋值给变量ax
+        fig = ax.figure
+        if ax.get_yscale() != 'piecewise': #确保用的是piecewise这个自定义的放大函数
+            ax.set_yscale('piecewise', bounds=bounds)
+        overall_max_x = max(overall_max_x, ax.get_xlim()[1])#更新最大最小值
+        overall_min_x = min(overall_min_x, ax.get_xlim()[0])
+    plt.rcParams['font.sans-serif'] = ['Calibrius','SimSun'] #英文用calibrius, 中文用宋体
+    plt.rcParams['axes.unicode_minus'] = False # 正常显示负号
+    ax.margins(y=0.08)  
+    ax.set_title("Title", fontweight = 'bold')
+    ax.set_xlabel("Value", fontweight = 'bold')
+    ax.set_ylabel("Cum Prob", fontweight = 'bold')
+    ax.set_ylim(bounds[0], bounds[-1]) 
 
     lines = []
     
     for dc in data_cols:
-        x        = list(dc.stats.keys())
-        cum, z   = zip(*dc.stats.values())      
-        label    = _label(dc, min(x), max(x))
+        x = list(dc.stats.keys())
+        cum, z = zip(*dc.stats.values())      
+        label = _label(dc, min(x), max(x))
 
-        line, = ax1.plot(x, cum,
+        line, = ax.plot(x, cum,
                          marker='o',
                          linewidth=1,
                          label=label)
@@ -300,32 +466,50 @@ def plot_distribution(data_cols: list[DataColumn],
     
     scalar = (overall_max_x - overall_min_x) * 0.1 
 
-    ax1.set_xlim(overall_min_x - scalar, overall_max_x + scalar)
-    ax1.set_xticks(np.linspace(overall_min_x - scalar,
+    ax.set_xlim(overall_min_x - scalar, overall_max_x + scalar)
+    ax.set_xticks(np.linspace(overall_min_x - scalar,
                                 overall_max_x + scalar, 11
                                   ))
 
-    ax1.tick_params(axis='x', rotation=45)
+    ax.tick_params(axis='x', rotation=45)
     
     if new_figure:
         # first draw: show just these lines
-        leg = ax1.legend(
+        leg = ax.legend(
             loc='upper left', bbox_to_anchor=(1.02, 0.5),
             frameon=True, prop={'size': 9}
         )
+        ax._main_legend = leg
     else:
-        # overlay: gather every Line2D that's on ax1, pull its label,
-        # and re‑draw the legend so we keep any edits
-        all_lines  = ax1.get_lines()
-        all_labels = [ln.get_label() for ln in all_lines]
-        leg = ax1.legend(
-            all_lines, all_labels,
+        old_leg = getattr(ax, "_main_legend", None)
+        if old_leg is not None:
+            for t in old_leg.get_texts():
+                t.set_picker(False)
+            old_leg.remove()
+
+        # 只保留“数据曲线”，过滤掉参考线（_is_ref=True）
+        data_lines_all  = [ln for ln in ax.get_lines() if not getattr(ln, "_is_ref", False)]
+        data_labels_all = [ln.get_label() for ln in data_lines_all]
+        leg = ax.legend(
+            data_lines_all, data_labels_all,
             loc='upper left', bbox_to_anchor=(1.02, 0.5),
             frameon=True, prop={'size': 9}
-        ) 
-    for txt in leg.get_texts():
-        txt.set_picker(True)
-    annot = ax1.annotate(
+        )
+        ax._main_legend = leg
+
+        # 如已有参考线图例，则重新加回画布（防止被新 legend 覆盖）
+        if hasattr(ax, "_ref_legend") and ax._ref_legend:
+            ax.add_artist(ax._ref_legend)
+
+        _recompute_ref_labels(ax)   
+        _refresh_ref_legend(ax, fig)  
+
+        for txt in leg.get_texts():
+            txt.set_picker(True)
+    ax._main_legend = leg
+
+# —— 定义鼠标徘徊（hover）事件，触发annotation（悬浮小窗） —— #
+    annot = ax.annotate(
         "", xy=(0,0), xytext=(15, -15), textcoords="offset points",
         bbox=dict(boxstyle="round", fc="w"),
         arrowprops=dict(arrowstyle="->"),
@@ -345,7 +529,7 @@ def plot_distribution(data_cols: list[DataColumn],
 
     def hover(event):
         vis = annot.get_visible()
-        if event.inaxes == ax1:
+        if event.inaxes == ax:
             for line in lines:
                 cont, ind = line.contains(event)
                 if cont:
@@ -358,6 +542,63 @@ def plot_distribution(data_cols: list[DataColumn],
             fig.canvas.draw_idle()
 
     fig.canvas.mpl_connect("motion_notify_event", hover)
+
+# —— 在画布（figure）上设置参考线的交互按钮 —— #
+    
+    if not hasattr(ax, "_add_btn"):
+        ax._add_btn = ax.text(
+            0.99, 1.02, "[Add Line]",
+            transform=ax.transAxes, ha="right", va="bottom", fontsize=9,
+            bbox=dict(boxstyle="round", fc="0.9", ec="0.7", alpha=0.8)
+        )
+        ax._add_btn.set_picker(True)
+        ax._add_btn._no_edit = True
+
+    if not hasattr(ax, "_clear_btn"):
+        ax._clear_btn = ax.text(
+            0.80, 1.02, "[Clear Lines]",
+            transform=ax.transAxes, ha="right", va="bottom", fontsize=9,
+            bbox=dict(boxstyle="round", fc="0.9", ec="0.7", alpha=0.8)
+        )
+        ax._clear_btn.set_picker(True)
+        ax._clear_btn._no_edit = True
+
+    mode = 'plot_CDF'
+    def on_pick(event):
+        artist = event.artist
+        # 用 ax 属性来判断，而不是闭包里的局部变量
+        if artist is getattr(ax, "_add_btn", None):
+            # 防抖/防重入：一个对话框未关，不再弹新框
+            if getattr(fig, "_ref_dialog_open", False):
+                return
+            fig._ref_dialog_open = True
+            try:
+                _add_ref_line(ax, fig, mode)
+            finally:
+                fig._ref_dialog_open = False
+            return
+
+        if artist is getattr(ax, "_clear_btn", None):
+            if hasattr(ax, "_ref_lines"):
+                for ln in list(ax._ref_lines):
+                    try:
+                        ln.remove()
+                    except Exception:
+                        pass
+                ax._ref_lines.clear()
+            if hasattr(ax, "_ref_legend") and ax._ref_legend:
+                try:
+                    ax._ref_legend.remove()
+                except Exception:
+                    pass
+                ax._ref_legend = None
+            fig.canvas.draw_idle()
+            return
+
+    # 只绑定一次这个 pick 回调（按 figure）
+    if getattr(fig, "_ref_btn_pick_cid", None) is None:
+        fig._ref_btn_pick_cid = fig.canvas.mpl_connect("pick_event", on_pick)
+
     plt.tight_layout()
     plt.grid(grid_var, which='major', axis='both', )
     fig.subplots_adjust(right=0.75)
@@ -376,39 +617,39 @@ def plot_Z(data_cols: list[DataColumn], new_figure = True, grid_var = True):
     val[1] for dc in data_cols for val in dc.stats.values()
 )
     if new_figure:
-        fig, ax2 = plt.subplots(figsize = (8,5))
+        fig, ax = plt.subplots(figsize = (8,5))
     else:
-        ax2 = plt.gca()
-        fig = ax2.figure
-        overall_max_x = max(overall_max_x, ax2.get_xlim()[1])
-        overall_min_x = min(overall_min_x, ax2.get_xlim()[0])
-        overall_max_y = max(overall_max_y, ax2.get_ylim()[1])
-        overall_min_y = min(overall_min_y, ax2.get_ylim()[0])
+        ax = plt.gca()
+        fig = ax.figure
+        overall_max_x = max(overall_max_x, ax.get_xlim()[1])
+        overall_min_x = min(overall_min_x, ax.get_xlim()[0])
+        overall_max_y = max(overall_max_y, ax.get_ylim()[1])
+        overall_min_y = min(overall_min_y, ax.get_ylim()[0])
         import matplotlib.ticker as mticker
-        ax2.xaxis.set_major_formatter(mticker.ScalarFormatter())
+        ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
     plt.rcParams['font.sans-serif'] = ['Calibrius','SimSun']
     plt.rcParams['axes.unicode_minus'] = False
-    ax2.margins(y=0.08) 
-    ax2.set_title("Title", fontweight = "bold")
-    ax2.set_xlabel("Value", fontweight = 'bold')
-    ax2.set_ylabel("Z value(\u03C3)", fontweight = 'bold')
+    ax.margins(y=0.08) 
+    ax.set_title("Title", fontweight = "bold")
+    ax.set_xlabel("Value", fontweight = 'bold')
+    ax.set_ylabel("Z value(\u03C3)", fontweight = 'bold')
     scalar = (overall_max_x - overall_min_x) * 0.1 
-    ax2.set_xlim(overall_min_x - scalar, overall_max_x + scalar)
-    ax2.set_xticks(np.linspace(overall_min_x - scalar,
+    ax.set_xlim(overall_min_x - scalar, overall_max_x + scalar)
+    ax.set_xticks(np.linspace(overall_min_x - scalar,
                                 overall_max_x + scalar, 11
-                                  ))
+                                  )) #默认分成十段，有10%余量
     rounded_max = int(overall_max_y + 1)
-    yticks = list(range(-rounded_max, rounded_max + 1)) 
+    yticks = list(range(-rounded_max, rounded_max + 1)) #y轴sigma四舍五入为整数
     yticks_labels = [str(ytick) + "\u03C3" for ytick in yticks]
-    ax2.set_yticks(ticks = yticks, labels = yticks_labels)
-    ax2.tick_params(axis='x', rotation=45)
+    ax.set_yticks(ticks = yticks, labels = yticks_labels)
+    ax.tick_params(axis='x', rotation=45)#x轴刻度转45度
 
     lines = []
     for dc in data_cols:
-        x        = list(dc.stats.keys())
-        cum, z   = zip(*dc.stats.values())
-        label    = _label(dc, min(x), max(x))
-        line, = ax2.plot(x, z,
+        x = list(dc.stats.keys())
+        cum, z = zip(*dc.stats.values())
+        label = _label(dc, min(x), max(x))
+        line, = ax.plot(x, z,
                         marker='s',
                         linewidth=1,
                         label=label)
@@ -418,31 +659,47 @@ def plot_Z(data_cols: list[DataColumn], new_figure = True, grid_var = True):
     
     if new_figure:
         # first draw: show just these lines
-        leg = ax2.legend(
+        leg = ax.legend(
             loc='upper left', bbox_to_anchor=(1.02, 0.5),
             frameon=True, prop={'size': 9}
         )
+        ax._main_legend = leg
     else:
-        # overlay: gather every Line2D that's on ax1, pull its label,
-        # and re‑draw the legend so we keep any edits
-        all_lines  = ax2.get_lines()
-        all_labels = [ln.get_label() for ln in all_lines]
-        leg = ax2.legend(
-            all_lines, all_labels,
+        old_leg = getattr(ax, "_main_legend", None)
+        if old_leg is not None:
+            for t in old_leg.get_texts():
+                t.set_picker(False)
+            old_leg.remove()
+
+        data_lines_all  = [ln for ln in ax.get_lines() if not getattr(ln, "_is_ref", False)]
+        data_labels_all = [ln.get_label() for ln in data_lines_all]
+        leg = ax.legend(
+            data_lines_all, data_labels_all,
             loc='upper left', bbox_to_anchor=(1.02, 0.5),
             frameon=True, prop={'size': 9}
-        ) 
+        )
+        ax._main_legend = leg
+
+        # 如已有参考线图例，则重新加回画布（防止被新 legend 覆盖）
+        if hasattr(ax, "_ref_legend") and ax._ref_legend:
+            ax.add_artist(ax._ref_legend)
+
+        _recompute_ref_labels(ax)     # 或 ax
+        _refresh_ref_legend(ax, fig)  # 或 ax, fig
+
     for txt in leg.get_texts():
         txt.set_picker(True)
-    annot = ax2.annotate(
+
+# —— 定义鼠标徘徊（hover）事件，触发annotation（悬浮小窗） —— #
+    annot = ax.annotate(
         "", xy=(0,0), xytext=(15, -15), textcoords="offset points",
         bbox=dict(boxstyle="round", fc="w"),
         arrowprops=dict(arrowstyle="->"),
         clip_on=False
     )
-    annot.set_visible(False)
+    annot.set_visible(False)#默认不可见，检测到鼠标徘徊才可见
 
-    def update_annot(line, ind):
+    def update_annot(line, ind):#编辑悬浮小窗
         xdata, ydata, zdata = line.get_xdata(), line.get_ydata(), line.zs
         i = ind["ind"][0]
         xi, yi, zi = xdata[i], ydata[i], zdata[i]
@@ -454,7 +711,7 @@ def plot_Z(data_cols: list[DataColumn], new_figure = True, grid_var = True):
 
     def hover(event):
         vis = annot.get_visible()
-        if event.inaxes == ax2:
+        if event.inaxes == ax:
             for line in lines:
                 cont, ind = line.contains(event)
                 if cont:
@@ -466,7 +723,63 @@ def plot_Z(data_cols: list[DataColumn], new_figure = True, grid_var = True):
             annot.set_visible(False)
             fig.canvas.draw_idle()
 
-    fig.canvas.mpl_connect("motion_notify_event", hover)
+    fig.canvas.mpl_connect("motion_notify_event", hover)#鼠标徘徊事件
+
+# —— 在画布上设置参考线交互按钮 —— #
+    if not hasattr(ax, "_add_btn"):
+        ax._add_btn = ax.text(
+            0.99, 1.02, "[Add Line]",
+            transform=ax.transAxes, ha="right", va="bottom", fontsize=9,
+            bbox=dict(boxstyle="round", fc="0.9", ec="0.7", alpha=0.8)
+        )
+        ax._add_btn.set_picker(True)
+        ax._add_btn._no_edit = True
+
+    if not hasattr(ax, "_clear_btn"):
+        ax._clear_btn = ax.text(
+            0.80, 1.02, "[Clear Lines]",
+            transform=ax.transAxes, ha="right", va="bottom", fontsize=9,
+            bbox=dict(boxstyle="round", fc="0.9", ec="0.7", alpha=0.8)
+        )
+        ax._clear_btn.set_picker(True)
+        ax._clear_btn._no_edit = True
+
+    mode = 'plot_Z'
+    def on_pick(event):
+        artist = event.artist
+        # 用 ax 属性来判断，而不是闭包里的局部变量
+        if artist is getattr(ax, "_add_btn", None):
+            # 防抖/防重入：一个对话框未关，不再弹新框
+            if getattr(fig, "_ref_dialog_open", False):
+                return
+            fig._ref_dialog_open = True
+            try:
+                _add_ref_line(ax, fig, mode)
+            finally:
+                fig._ref_dialog_open = False
+            return
+
+        if artist is getattr(ax, "_clear_btn", None):
+            if hasattr(ax, "_ref_lines"):
+                for ln in list(ax._ref_lines):
+                    try:
+                        ln.remove()
+                    except Exception:
+                        pass
+                ax._ref_lines.clear()
+            if hasattr(ax, "_ref_legend") and ax._ref_legend:
+                try:
+                    ax._ref_legend.remove()
+                except Exception:
+                    pass
+                ax._ref_legend = None
+            fig.canvas.draw_idle()
+            return
+
+    # 只绑定一次这个 pick 回调（按 figure）
+    if getattr(fig, "_ref_btn_pick_cid", None) is None:
+        fig._ref_btn_pick_cid = fig.canvas.mpl_connect("pick_event", on_pick)
+
     plt.tight_layout()
     plt.grid(grid_var, which='major', axis='both', )
     fig.subplots_adjust(right=0.75)
@@ -480,5 +793,5 @@ def plot_Z(data_cols: list[DataColumn], new_figure = True, grid_var = True):
 #"C:\Users\1000405157\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\Scripts\pyinstaller.exe" --onedir --noconsole "C:\Users\1000405157\Desktop\Work\plot program\plot_gui.py"
 
 
-#ax1.xaxis.set_major_locator(MaxNLocator(nbins=11, prune='both'))  # 最多11个主刻度
+#ax.xaxis.set_major_locator(MaxNLocator(nbins=11, prune='both'))  # 最多11个主刻度
 
