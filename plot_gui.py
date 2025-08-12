@@ -79,45 +79,49 @@ def _latest_alive(lst):
 
 # —— 自定义x轴，y轴标题以及主标题，图例曲线名称 —— #
 def enable_text_editing(fig, ax, master):
-    # 已有回调 -> 只刷新 legend 文本列表并返回
-    # —— 在 plot.py 顶部合适位置加 —— #
     def _refresh_legend_pickables(ax, fig):
-        """刷新当前主图例的文字为可编辑，并更新 fig._legend_texts。"""
-        legend = ax.get_legend()
+        legend = getattr(ax, "_main_legend", None)
         fig._legend_texts = []
         if legend:
             for txt in legend.get_texts():
+                if hasattr(txt, "_no_edit") and txt._no_edit:
+                    continue
                 txt.set_picker(True)
                 fig._legend_texts.append(txt)
 
-    if getattr(fig, "_text_edit_enabled", False):
-        _refresh_legend_pickables(ax, fig)
-        return
+    if not getattr(fig, "_text_edit_initialized", False):
+        ax.title.set_picker(True)
+        ax.xaxis.label.set_picker(True)
+        ax.yaxis.label.set_picker(True)
+        fig._editing_lock = False
+        fig._last_edit_t  = 0.0
+        fig._text_edit_initialized = True
 
-    # 第一次：设置 pickable
     _refresh_legend_pickables(ax, fig)
-    ax.title.set_picker(True)
-    ax.xaxis.label.set_picker(True)
-    ax.yaxis.label.set_picker(True)
-
-    fig._editing_lock = False
-    fig._last_edit_t  = 0.0
 
     def on_pick(event):
         import time
-        if fig._editing_lock:
-            return
-        # 轻量防抖：同一次点击可能触发多次 pick
-        if time.monotonic() - getattr(fig, "_last_edit_t", 0) < 0.30:
-            return
-
         artist = event.artist
-        # 忽略“非编辑控件”（例如 [Add Line]/[Clear Lines]）
-        if isinstance(artist, Text) and getattr(artist, "_no_edit", False):
+
+        # 只处理允许编辑的文字
+        allowed = [ax.title, ax.xaxis.label, ax.yaxis.label] + getattr(fig, "_legend_texts", [])
+        if not (isinstance(artist, Text) and artist in allowed):
+            return
+        if getattr(artist, "_no_edit", False):
             return
 
-        allowed = [ax.title, ax.xaxis.label, ax.yaxis.label] + getattr(fig, "_legend_texts", [])
-        if artist not in allowed:
+        # —— 关键保险丝：同一 Text 若已有一个编辑框，立即返回 —— #
+        if getattr(artist, "_edit_open", False):
+            return
+        artist._edit_open = True  # 立刻置位，防止并行回调再进来
+
+        # 轻量防抖（防止某些后端重复触发）
+        if time.monotonic() - getattr(fig, "_last_edit_t", 0) < 0.25:
+            artist._edit_open = False
+            return
+
+        if getattr(fig, "_editing_lock", False):
+            artist._edit_open = False
             return
 
         fig._editing_lock = True
@@ -129,19 +133,21 @@ def enable_text_editing(fig, ax, master):
             rest = '\n' + parts[1] if len(parts) > 1 else ''
 
             m = re.fullmatch(r'\$\\mathbf\{(.*?)\}\$', math_part)
-            if m:  # legend 曲线名
+            if m:
                 inner = m.group(1)
                 prompt = f"Current title: {inner}\nPlease input new title: "
                 new_inner = simpledialog.askstring("Edit", prompt, parent=master)
                 if new_inner and new_inner != inner:
                     new_text = rf"$\mathbf{{{plot._tex_escape(new_inner)}}}${rest}"
                     artist.set_text(new_text)
-                    # 同步 line 的 label（保持 legend 正确）
                     handles, _ = ax.get_legend_handles_labels()
-                    idx = getattr(fig, "_legend_texts", []).index(artist)
-                    if idx < len(handles):
-                        handles[idx].set_label(new_text)
-            else:  # 主标题或轴标题
+                    try:
+                        idx = getattr(fig, "_legend_texts", []).index(artist)
+                        if idx < len(handles):
+                            handles[idx].set_label(new_text)
+                    except ValueError:
+                        pass
+            else:
                 prompt = f"Current title: {old}\nPlease input new title: "
                 new = simpledialog.askstring("Edit", prompt, parent=master)
                 if new is not None and new != old:
@@ -150,9 +156,17 @@ def enable_text_editing(fig, ax, master):
             fig.canvas.draw_idle()
         finally:
             fig._editing_lock = False
+            artist._edit_open = False
 
+    # 断开旧回调，确保只有一个
+    old_cid = getattr(fig, "_text_edit_cid", None)
+    if old_cid is not None:
+        try:
+            fig.canvas.mpl_disconnect(old_cid)
+        except Exception:
+            pass
     fig._text_edit_cid = fig.canvas.mpl_connect('pick_event', on_pick)
-    fig._text_edit_enabled = True
+
 
 
 
