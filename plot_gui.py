@@ -7,12 +7,36 @@ from matplotlib.text import Text
 import numpy as np
 
 # —— 捕获异常，一旦代码报错则跳出错误弹窗 —— #
-LOG_FILE = os.path.join(os.path.expanduser("~"), "plot_gui_error.log")
-logging.basicConfig(
-    filename=LOG_FILE,
-    level=logging.ERROR,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+# —— 日志写到“程序所在目录”（脚本：__file__；PyInstaller：sys.executable） —— #
+def _program_dir() -> str:
+    # PyInstaller 打包（onefile/onedir）
+    if getattr(sys, "frozen", False) and hasattr(sys, "executable"):
+        return os.path.dirname(sys.executable)
+    # 普通脚本运行
+    return os.path.dirname(os.path.abspath(__file__))
+
+PROGRAM_DIR = _program_dir()
+LOG_FILE = os.path.join(PROGRAM_DIR, "plot_gui_error.log")
+
+def _init_logging():
+    global LOG_FILE
+    # 先探测程序目录是否可写，避免 basicConfig 静默失败
+    try:
+        os.makedirs(PROGRAM_DIR, exist_ok=True)
+        with open(LOG_FILE, "a", encoding="utf-8") as _f:
+            pass
+    except Exception:
+        # 万一程序目录不可写，降级到用户目录，保证有日志
+        LOG_FILE = os.path.join(os.path.expanduser("~"), "plot_gui_error.log")
+    logging.basicConfig(
+        filename=LOG_FILE,
+        level=logging.ERROR,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        encoding="utf-8",
+    )
+
+_init_logging()
+
 
 def _format_exc(exc_type, exc_value, exc_tb) -> str:
     return "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
@@ -338,4 +362,5 @@ chk_grid = tk.Checkbutton(container, text = "Add grids",
                           variable = grid_var).pack(fill = "x",
                                                 pady = 5)
 root.mainloop()
+
 
